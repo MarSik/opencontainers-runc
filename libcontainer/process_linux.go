@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"syscall"
 	"time"
 
 	"github.com/opencontainers/runc/libcontainer/cgroups"
@@ -144,6 +145,21 @@ func (p *setnsProcess) start() (retErr error) {
 			}
 		}
 	}
+
+	// Reset the inherited cpu affinity. Old kernels do that automatically, but
+	// new kernels remember the affinity that was set before the cgroup move.
+	// This is undesirable, because it inherits the systemd affinity when the container
+	// should really move to the container space cpus.
+	// See: https://issues.redhat.com/browse/OCPBUGS-15102
+	//
+	// The sched_setaffinity call will always return an error (EINVAL or ENODEV)
+	// when used like this. This is expected and part of the backward compatibility.
+	if err = unix.SchedSetaffinity(p.pid(), nil); err != nil {
+		if err != syscall.EINVAL && err != syscall.ENODEV {
+			return fmt.Errorf("error resetting pid %d affinity: %w", p.pid(), err)
+		}
+	}
+
 	if p.intelRdtPath != "" {
 		// if Intel RDT "resource control" filesystem path exists
 		_, err := os.Stat(p.intelRdtPath)
